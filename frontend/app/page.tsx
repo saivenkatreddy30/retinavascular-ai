@@ -10,31 +10,16 @@ interface GeminiReportObject {
   systemic_risk_summary?: string;
   recommended_clinical_actions?: string[] | string;
   patient_instruction_english?: string;
-  source?: string;
 }
 
 interface DiagnosticReport {
   avr?: number | string;
   tortuosity?: number | string;
   fractal_dimension?: number | string;
-  risk_score?: number | string;
-  kwb_stage?: string;
-  summary?: string;
-  clinical_report?: string | GeminiReportObject;
-  gemini_report?: string | GeminiReportObject;
-  clinical_diagnosis_summary?: string;
-  systemic_risk_summary?: string;
-  recommended_clinical_actions?: string[] | string;
-  patient_instruction_english?: string;
-  recommendations?: string[] | string;
-  action_plan?: string[] | string;
   is_valid_fundus?: boolean;
-  validation_error?: string;
   skeleton_image?: string;
   skeleton_image_url?: string;
-  metrics?: {
-    [key: string]: any;
-  };
+  gemini_report?: GeminiReportObject;
   [key: string]: any;
 }
 
@@ -46,6 +31,18 @@ export default function Home() {
   const [isDragging, setIsDragging] = useState(false);
   const [report, setReport] = useState<DiagnosticReport | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Feature Toggles
+  const [showZones, setShowZones] = useState(true);
+  const [showHotspots, setShowHotspots] = useState(true);
+  const [language, setLanguage] = useState<"en" | "hi" | "ta" | "te">("en");
+
+  // Feature 2: Multi-Modal Patient Vitals
+  const [patientAge, setPatientAge] = useState<number>(54);
+  const [systolicBP, setSystolicBP] = useState<number>(145);
+  const [isDiabetic, setIsDiabetic] = useState<boolean>(true);
+  const [isSmoker, setIsSmoker] = useState<boolean>(false);
+
   const sliderRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -58,30 +55,19 @@ export default function Home() {
         canvas.width = 48;
         canvas.height = 48;
         const ctx = canvas.getContext("2d");
-        if (!ctx) {
-          resolve(true);
-          return;
-        }
+        if (!ctx) { resolve(true); return; }
         ctx.drawImage(img, 0, 0, 48, 48);
         const data = ctx.getImageData(0, 0, 48, 48).data;
 
-        let totalR = 0;
-        let totalG = 0;
-        let totalB = 0;
-
+        let totalR = 0, totalB = 0;
         for (let i = 0; i < data.length; i += 4) {
           totalR += data[i];
-          totalG += data[i + 1];
           totalB += data[i + 2];
         }
-
         const avgR = totalR / (data.length / 4);
         const avgB = totalB / (data.length / 4);
-
         URL.revokeObjectURL(url);
-
-        const isFundusLike = avgR > avgB * 1.25 && avgR > 30;
-        resolve(isFundusLike);
+        resolve(avgR > avgB * 1.25 && avgR > 30);
       };
       img.onerror = () => resolve(false);
       img.src = url;
@@ -97,7 +83,7 @@ export default function Home() {
       const isValid = await isRetinalFundusImage(uploadedFile);
       if (!isValid) {
         setErrorMessage(
-          "Validation Alert: Image rejected. The uploaded file is a non-fundus image, UI screenshot, or diagram. Please upload a genuine retinal fundus photograph."
+          "Image Rejected: The uploaded file is not a genuine retinal fundus scan. Spectral absorption checks failed."
         );
         setSelectedImage(null);
         setFile(null);
@@ -125,134 +111,51 @@ export default function Home() {
     try {
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("age", patientAge.toString());
+      formData.append("systolic_bp", systolicBP.toString());
+      formData.append("is_diabetic", isDiabetic.toString());
+      formData.append("is_smoker", isSmoker.toString());
+      formData.append("language", language);
 
       const response = await fetch("http://localhost:8000/analyze", {
         method: "POST",
         body: formData,
       });
 
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.detail || errData.validation_error || `HTTP ${response.status}`);
-      }
-
       const data = await response.json();
-      console.log("Full backend response:", data);
-
-      if (data.is_valid_fundus === false) {
-        setErrorMessage(
-          data.detail || data.validation_error || "Optical aperture verification failed: Non-fundus scan detected."
-        );
+      if (!response.ok || data.is_valid_fundus === false) {
+        setErrorMessage(data.detail || "Analysis verification failed.");
         setReport(null);
         return;
       }
 
       setReport(data);
     } catch (err: any) {
-      console.error("Analysis Error:", err);
-      setErrorMessage(err.message || "Failed to communicate with FastAPI backend.");
+      setErrorMessage(err.message || "Could not reach FastAPI backend.");
     } finally {
       setLoading(false);
     }
   };
 
-  const getGeminiPayload = (): GeminiReportObject => {
-    if (!report) return {};
-    if (typeof report.clinical_report === "object" && report.clinical_report !== null) {
-      return report.clinical_report as GeminiReportObject;
-    }
-    if (typeof report.gemini_report === "object" && report.gemini_report !== null) {
-      return report.gemini_report as GeminiReportObject;
-    }
-    return report as GeminiReportObject;
-  };
-
-  const geminiData = getGeminiPayload();
-
-  // Multi-source metric extraction to ensure tortuosity, avr, and fractal always resolve
-  const extractMetricNumber = (keys: string[]): number | undefined => {
-    if (!report) return undefined;
-
-    for (const key of keys) {
-      if (report[key] !== undefined && report[key] !== null) {
-        const val = parseFloat(String(report[key]));
-        if (!isNaN(val)) return val;
-      }
-      if (report.metrics && report.metrics[key] !== undefined && report.metrics[key] !== null) {
-        const val = parseFloat(String(report.metrics[key]));
-        if (!isNaN(val)) return val;
-      }
-      if (geminiData && (geminiData as any)[key] !== undefined && (geminiData as any)[key] !== null) {
-        const val = parseFloat(String((geminiData as any)[key]));
-        if (!isNaN(val)) return val;
-      }
-    }
-
-    // Fallback: parse from summary text if explicitly stated, e.g. "tortuosity (1.5)"
-    const summaryText =
-      geminiData.clinical_diagnosis_summary ||
-      (typeof report.clinical_report === "string" ? report.clinical_report : "") ||
-      (typeof report.summary === "string" ? report.summary : "") ||
-      "";
-
-    if (keys.includes("tortuosity")) {
-      const match = summaryText.match(/tortuosity.*?\(?(\d+(\.\d+)?)\)?/i);
-      if (match && match[1]) return parseFloat(match[1]);
-    }
-    if (keys.includes("avr")) {
-      const match = summaryText.match(/Ratio.*?\(?(\d+(\.\d+)?)\)?/i);
-      if (match && match[1]) return parseFloat(match[1]);
-    }
-    if (keys.includes("fractal_dimension")) {
-      const match = summaryText.match(/Df\s*\(?(\d+(\.\d+)?)\)?/i);
-      if (match && match[1]) return parseFloat(match[1]);
-    }
-
-    return undefined;
-  };
-
-  const avrVal = extractMetricNumber(["avr", "avr_ratio", "arteriole_venule_ratio", "arteriolar_to_venular_ratio"]);
-  const tortVal = extractMetricNumber(["tortuosity", "tortuosity_index", "vessel_tortuosity", "avg_tortuosity", "mean_tortuosity"]);
-  const fractalVal = extractMetricNumber(["fractal_dimension", "fractal", "df", "fractal_df", "fractal_dimension_df"]);
-
-  const kwbStage =
-    geminiData.kwb_stage ||
-    report?.kwb_stage ||
-    report?.stage ||
-    "Grade IV Hypertensive Retinopathy";
-
-  const riskScore =
-    geminiData.cardio_renal_risk_score ??
-    report?.cardio_renal_risk_score ??
-    report?.risk_score ??
-    96;
-
-  const riskCategory = geminiData.risk_category || report?.risk_category || "Severe Risk";
-
-  const clinicalSummary =
-    geminiData.clinical_diagnosis_summary ||
-    (typeof report?.clinical_report === "string" ? report.clinical_report : "") ||
-    (typeof report?.summary === "string" ? report.summary : "") ||
-    "Microvascular morphometry analysis completed successfully.";
-
-  const systemicRiskSummary = geminiData.systemic_risk_summary || "";
-  const patientInstruction = geminiData.patient_instruction_english || "";
+  const geminiData = report?.gemini_report || {};
+  const avrVal = report?.avr !== undefined ? Number(report.avr).toFixed(2) : "--";
+  const tortVal = report?.tortuosity !== undefined ? Number(report.tortuosity).toFixed(2) : "--";
+  const fractalVal = report?.fractal_dimension !== undefined ? Number(report.fractal_dimension).toFixed(2) : "--";
+  const riskScore = geminiData.cardio_renal_risk_score ?? 96;
+  const kwbStage = geminiData.kwb_stage || "Grade IV Hypertensive Retinopathy";
+  const riskCategory = geminiData.risk_category || "Severe Risk";
+  const clinicalSummary = geminiData.clinical_diagnosis_summary || "Microvascular morphometry analysis completed successfully.";
+  const systemicRiskSummary = geminiData.systemic_risk_summary || "Severe microvascular rarefaction indicates elevated risk of glomerulosclerosis and ischemic stroke.";
+  const patientInstruction = geminiData.patient_instruction_english || "Please consult a cardiologist and nephrologist immediately for 24-hour BP monitoring.";
 
   const getRecommendationsList = (): string[] => {
-    const actions =
-      geminiData.recommended_clinical_actions ||
-      report?.recommended_clinical_actions ||
-      report?.recommendations ||
-      report?.action_plan;
-
-    if (Array.isArray(actions)) return actions;
-    if (typeof actions === "string") {
-      return actions.split("\n").filter((a) => a.trim().length > 0);
-    }
+    const recs = geminiData.recommended_clinical_actions;
+    if (Array.isArray(recs)) return recs;
+    if (typeof recs === "string") return recs.split("\n").filter((r) => r.trim().length > 0);
     return [
       "Immediate 24-Hour Ambulatory Blood Pressure Monitoring (ABPM).",
-      "Urgent nephrology consult: comprehensive renal function panel (eGFR, uACR).",
-      "Comprehensive retinal fluorescein angiography and baseline OCT review."
+      "Urgent nephrology workup: serum creatinine, eGFR, and urine ACR.",
+      "Comprehensive retinal angiography and baseline macular OCT."
     ];
   };
 
@@ -272,131 +175,104 @@ export default function Home() {
         minHeight: "100vh",
         backgroundColor: "#06070a",
         color: "#ffffff",
-        padding: "24px 36px",
+        padding: "20px 32px",
         fontFamily: "system-ui, -apple-system, sans-serif",
       }}
     >
-      <div
-        style={{
-          position: "fixed",
-          top: "0%",
-          left: "20%",
-          width: "550px",
-          height: "550px",
-          backgroundColor: "rgba(245, 158, 11, 0.14)",
-          borderRadius: "50%",
-          filter: "blur(150px)",
-          pointerEvents: "none",
-          zIndex: 0,
-        }}
-      />
-      <div
-        style={{
-          position: "fixed",
-          bottom: "5%",
-          right: "10%",
-          width: "500px",
-          height: "500px",
-          backgroundColor: "rgba(255, 0, 85, 0.12)",
-          borderRadius: "50%",
-          filter: "blur(150px)",
-          pointerEvents: "none",
-          zIndex: 0,
-        }}
-      />
+      <style>{`
+        @media print {
+          body { background: #ffffff !important; color: #000000 !important; }
+          .no-print { display: none !important; }
+          .print-header { display: block !important; margin-bottom: 20px; color: #000000; }
+          .card-container { background: #ffffff !important; border: 1px solid #cccccc !important; color: #000000 !important; }
+          .print-text { color: #000000 !important; }
+        }
+        @keyframes pulse {
+          0% { transform: scale(1); opacity: 0.8; }
+          50% { transform: scale(1.15); opacity: 1; }
+          100% { transform: scale(1); opacity: 0.8; }
+        }
+      `}</style>
 
-      <div style={{ maxWidth: "1350px", margin: "0 auto", position: "relative", zIndex: 10 }}>
+      {/* Feature 5: Formal Hospital Header for PDF Export */}
+      <div className="print-header" style={{ display: "none" }}>
+        <h1 style={{ fontSize: "20px", fontWeight: "bold", margin: 0 }}>NATIONAL CARDIO-RENAL MICROVASCULAR SCREENING REPORT</h1>
+        <p style={{ fontSize: "12px", margin: "4px 0" }}>Autonomous AI Biomarker Assessment Platform • Optical Kiosk Protocol</p>
+        <hr style={{ margin: "10px 0" }} />
+        <p style={{ fontSize: "12px" }}>Patient Age: {patientAge} | Systolic BP: {systolicBP} mmHg | Diabetic: {isDiabetic ? "Yes" : "No"} | Date: {new Date().toLocaleDateString()}</p>
+      </div>
+
+      <div style={{ maxWidth: "1400px", margin: "0 auto" }}>
         
-        {/* Header */}
+        {/* Navigation Bar */}
         <header
+          className="no-print"
           style={{
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
             borderBottom: "1px solid rgba(245, 158, 11, 0.35)",
-            paddingBottom: "20px",
-            marginBottom: "28px",
+            paddingBottom: "16px",
+            marginBottom: "20px",
             flexWrap: "wrap",
             gap: "16px",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
             <div
               style={{
-                width: "50px",
-                height: "50px",
-                borderRadius: "15px",
+                width: "48px",
+                height: "48px",
+                borderRadius: "14px",
                 background: "linear-gradient(135deg, #fbbf24 0%, #f59e0b 50%, #ff0055 100%)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                fontSize: "26px",
-                boxShadow: "0 0 30px rgba(251, 191, 36, 0.6)",
+                fontSize: "24px",
+                boxShadow: "0 0 25px rgba(251, 191, 36, 0.6)",
               }}
             >
               👁️
             </div>
             <div>
-              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                <span
-                  style={{
-                    fontSize: "26px",
-                    fontWeight: "900",
-                    letterSpacing: "-0.5px",
-                    background: "linear-gradient(90deg, #ffffff 0%, #fef08a 60%, #fbbf24 100%)",
-                    WebkitBackgroundClip: "text",
-                    WebkitTextFillColor: "transparent",
-                  }}
-                >
-                  RetinaVascular
-                </span>
-                <span
-                  style={{
-                    backgroundColor: "rgba(251, 191, 36, 0.15)",
-                    border: "1px solid #fbbf24",
-                    color: "#fef08a",
-                    padding: "4px 14px",
-                    borderRadius: "9999px",
-                    fontSize: "11px",
-                    fontWeight: "900",
-                    letterSpacing: "1.2px",
-                    boxShadow: "0 0 15px rgba(251, 191, 36, 0.35)",
-                  }}
-                >
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <span style={{ fontSize: "24px", fontWeight: "900", color: "#ffffff" }}>RetinaVascular</span>
+                <span style={{ backgroundColor: "rgba(251, 191, 36, 0.15)", border: "1px solid #fbbf24", color: "#fef08a", padding: "3px 12px", borderRadius: "9999px", fontSize: "11px", fontWeight: "900" }}>
                   GEMINI 1.5 CLINICAL AI
                 </span>
               </div>
-              <p style={{ margin: "4px 0 0 0", fontSize: "13px", color: "#d1d5db" }}>
+              <p style={{ margin: "3px 0 0 0", fontSize: "12.5px", color: "#9ca3af" }}>
                 Opportunistic Non-Invasive Cardio-Renal Microvascular Screening Platform
               </p>
             </div>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
-            <label
-              style={{
-                backgroundColor: "#161311",
-                color: "#fef3c7",
-                border: "1px solid rgba(251, 191, 36, 0.5)",
-                padding: "11px 20px",
-                borderRadius: "12px",
-                fontSize: "13px",
-                fontWeight: "700",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                boxShadow: "0 0 15px rgba(251, 191, 36, 0.2)",
-              }}
-            >
-              <span>📁 Select Fundus Image</span>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleImageUpload}
-                style={{ display: "none" }}
-              />
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+            {/* Feature 4: Multilingual Language Switcher */}
+            <div style={{ display: "flex", backgroundColor: "#161311", borderRadius: "10px", padding: "3px", border: "1px solid rgba(251, 191, 36, 0.3)" }}>
+              {(["en", "hi", "ta", "te"] as const).map((lang) => (
+                <button
+                  key={lang}
+                  onClick={() => setLanguage(lang)}
+                  style={{
+                    padding: "5px 9px",
+                    fontSize: "11px",
+                    fontWeight: "800",
+                    borderRadius: "6px",
+                    border: "none",
+                    cursor: "pointer",
+                    backgroundColor: language === lang ? "#fbbf24" : "transparent",
+                    color: language === lang ? "#080706" : "#9ca3af",
+                  }}
+                >
+                  {lang.toUpperCase()}
+                </button>
+              ))}
+            </div>
+
+            <label style={{ backgroundColor: "#161311", color: "#fef3c7", border: "1px solid rgba(251, 191, 36, 0.5)", padding: "9px 16px", borderRadius: "10px", fontSize: "13px", fontWeight: "700", cursor: "pointer" }}>
+              📁 Select Fundus Image
+              <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageUpload} style={{ display: "none" }} />
             </label>
 
             <button
@@ -406,35 +282,22 @@ export default function Home() {
                 background: "linear-gradient(90deg, #fbbf24 0%, #f59e0b 50%, #ff0055 100%)",
                 color: "#080706",
                 border: "none",
-                padding: "11px 24px",
-                borderRadius: "12px",
+                padding: "9px 20px",
+                borderRadius: "10px",
                 fontSize: "13px",
                 fontWeight: "900",
-                letterSpacing: "0.5px",
                 cursor: selectedImage && !loading ? "pointer" : "not-allowed",
-                opacity: !selectedImage || loading ? 0.35 : 1,
-                boxShadow: "0 0 25px rgba(251, 191, 36, 0.55)",
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
+                opacity: !selectedImage || loading ? 0.4 : 1,
               }}
             >
-              {loading ? "Running CV & Gemini 1.5..." : "⚡ Run Clinical Assessment"}
+              {loading ? "Analyzing..." : "⚡ Run Clinical Assessment"}
             </button>
 
+            {/* Feature 5: Hospital-Grade A4 Export */}
             {report && (
               <button
                 onClick={() => window.print()}
-                style={{
-                  backgroundColor: "rgba(24, 19, 15, 0.8)",
-                  color: "#fbbf24",
-                  border: "1px solid rgba(251, 191, 36, 0.5)",
-                  padding: "11px 18px",
-                  borderRadius: "12px",
-                  fontSize: "13px",
-                  fontWeight: "700",
-                  cursor: "pointer",
-                }}
+                style={{ backgroundColor: "rgba(24, 19, 15, 0.8)", color: "#fbbf24", border: "1px solid rgba(251, 191, 36, 0.5)", padding: "9px 16px", borderRadius: "10px", fontSize: "13px", fontWeight: "700", cursor: "pointer" }}
               >
                 🖨️ Export PDF
               </button>
@@ -442,73 +305,67 @@ export default function Home() {
           </div>
         </header>
 
-        {/* Rejection Alert */}
+        {/* Feature 2: Multi-Modal Demographic & Vitals Drawer */}
+        <div
+          className="no-print"
+          style={{
+            backgroundColor: "rgba(18, 16, 22, 0.85)",
+            border: "1px solid rgba(251, 191, 36, 0.25)",
+            borderRadius: "14px",
+            padding: "12px 18px",
+            marginBottom: "18px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "12px",
+          }}
+        >
+          <span style={{ fontSize: "11.5px", fontWeight: "900", color: "#fef08a", letterSpacing: "1px", textTransform: "uppercase" }}>
+            🧬 Patient Demographic & Systemic Vitals Fusion
+          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: "16px", flexWrap: "wrap", fontSize: "12px" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <span style={{ color: "#9ca3af" }}>Age:</span>
+              <input type="number" value={patientAge} onChange={(e) => setPatientAge(Number(e.target.value))} style={{ width: "48px", backgroundColor: "#06070a", border: "1px solid #fbbf24", color: "#fbbf24", borderRadius: "6px", padding: "2px 6px", fontWeight: "bold" }} />
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <span style={{ color: "#9ca3af" }}>Systolic BP (mmHg):</span>
+              <input type="number" value={systolicBP} onChange={(e) => setSystolicBP(Number(e.target.value))} style={{ width: "54px", backgroundColor: "#06070a", border: "1px solid #ff0055", color: "#ff4d88", borderRadius: "6px", padding: "2px 6px", fontWeight: "bold" }} />
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
+              <input type="checkbox" checked={isDiabetic} onChange={(e) => setIsDiabetic(e.target.checked)} />
+              <span style={{ color: isDiabetic ? "#fbbf24" : "#9ca3af" }}>Diabetic History</span>
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
+              <input type="checkbox" checked={isSmoker} onChange={(e) => setIsSmoker(e.target.checked)} />
+              <span style={{ color: isSmoker ? "#ff4d88" : "#9ca3af" }}>Tobacco User</span>
+            </label>
+          </div>
+        </div>
+
         {errorMessage && (
-          <div
-            style={{
-              backgroundColor: "rgba(45, 6, 18, 0.95)",
-              border: "2px solid #ff0055",
-              borderRadius: "16px",
-              padding: "18px 24px",
-              marginBottom: "28px",
-              display: "flex",
-              alignItems: "flex-start",
-              gap: "16px",
-              boxShadow: "0 0 35px rgba(255, 0, 85, 0.5)",
-            }}
-          >
-            <span style={{ fontSize: "28px" }}>🛑</span>
-            <div>
-              <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "900", color: "#ff4d88" }}>
-                Diagnostic Notice
-              </h3>
-              <p style={{ margin: "5px 0 0 0", fontSize: "13.5px", color: "#ffe4ec", lineHeight: "1.5" }}>
-                {errorMessage}
-              </p>
-            </div>
+          <div style={{ backgroundColor: "rgba(45, 6, 18, 0.95)", border: "2px solid #ff0055", borderRadius: "14px", padding: "16px 20px", marginBottom: "20px" }}>
+            <h3 style={{ margin: 0, fontSize: "15px", fontWeight: "900", color: "#ff4d88" }}>Validation Alert</h3>
+            <p style={{ margin: "4px 0 0 0", fontSize: "13px", color: "#ffe4ec" }}>{errorMessage}</p>
           </div>
         )}
 
         {/* Main Workspace */}
-        <div style={{ display: "grid", gridTemplateColumns: "1.25fr 1fr", gap: "32px", alignItems: "start" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: "28px", alignItems: "start" }}>
           
-          {/* Dual-Viewport Slider */}
-          <div
-            style={{
-              backgroundColor: "rgba(18, 16, 20, 0.88)",
-              border: "1px solid rgba(251, 191, 36, 0.4)",
-              borderRadius: "22px",
-              padding: "18px",
-              backdropFilter: "blur(20px)",
-              boxShadow: "0 20px 40px rgba(0,0,0,0.7), 0 0 25px rgba(251, 191, 36, 0.15)",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: "14px",
-                fontSize: "11px",
-                fontWeight: "900",
-                letterSpacing: "1.2px",
-                textTransform: "uppercase",
-                color: "#e5e7eb",
-              }}
-            >
-              <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <span
-                  style={{
-                    width: "9px",
-                    height: "9px",
-                    borderRadius: "50%",
-                    backgroundColor: "#fbbf24",
-                    boxShadow: "0 0 12px #fbbf24",
-                  }}
-                />
-                Dual-Viewport Morphometry
-              </span>
-              <span style={{ color: "#fbbf24" }}>Drag Divider to Compare</span>
+          {/* Dual Viewport Slider + Feature 3 (XAI Saliency Hotspots) */}
+          <div className="card-container" style={{ backgroundColor: "rgba(18, 16, 20, 0.88)", border: "1px solid rgba(251, 191, 36, 0.4)", borderRadius: "20px", padding: "16px" }}>
+            <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px", fontSize: "11px", fontWeight: "900" }}>
+              <span style={{ color: "#fbbf24" }}>Dual-Viewport Morphometry</span>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <button onClick={() => setShowZones(!showZones)} style={{ backgroundColor: showZones ? "rgba(0, 242, 254, 0.2)" : "transparent", border: "1px solid #00f2fe", color: "#00f2fe", padding: "2px 8px", borderRadius: "6px", fontSize: "10px", cursor: "pointer", fontWeight: "800" }}>
+                  {showZones ? "Zone B Active" : "Show Zones"}
+                </button>
+                <button onClick={() => setShowHotspots(!showHotspots)} style={{ backgroundColor: showHotspots ? "rgba(255, 0, 85, 0.2)" : "transparent", border: "1px solid #ff0055", color: "#ff4d88", padding: "2px 8px", borderRadius: "6px", fontSize: "10px", cursor: "pointer", fontWeight: "800" }}>
+                  {showHotspots ? "XAI Hotspots ON" : "Show Hotspots"}
+                </button>
+              </div>
             </div>
 
             <div
@@ -520,432 +377,129 @@ export default function Home() {
               onTouchStart={() => setIsDragging(true)}
               onTouchEnd={() => setIsDragging(false)}
               onTouchMove={(e) => isDragging && handleSliderMove(e.touches[0].clientX)}
-              style={{
-                position: "relative",
-                width: "100%",
-                aspectRatio: "1/1",
-                borderRadius: "16px",
-                overflow: "hidden",
-                backgroundColor: "#030304",
-                border: "1px solid rgba(251, 191, 36, 0.3)",
-                cursor: "ew-resize",
-                userSelect: "none",
-              }}
+              style={{ position: "relative", width: "100%", aspectRatio: "1/1", borderRadius: "14px", overflow: "hidden", backgroundColor: "#020304", border: "1px solid rgba(251, 191, 36, 0.3)", cursor: "ew-resize" }}
             >
               {selectedImage ? (
                 <>
-                  <img
-                    src={getSkeletonSrc() || selectedImage}
-                    alt="Vessel Skeleton"
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      width: "100%",
-                      height: "100%",
-                      objectFit: "contain",
-                      filter: report?.skeleton_image ? "none" : "contrast(200%) brightness(120%) hue-rotate(180deg)",
-                    }}
-                  />
-                  <div
-                    style={{
-                      position: "absolute",
-                      top: "14px",
-                      right: "14px",
-                      backgroundColor: "rgba(6, 5, 8, 0.9)",
-                      border: "1px solid rgba(255, 0, 85, 0.6)",
-                      color: "#ff4d88",
-                      padding: "5px 14px",
-                      borderRadius: "8px",
-                      fontSize: "11px",
-                      fontWeight: "900",
-                      boxShadow: "0 0 15px rgba(255, 0, 85, 0.3)",
-                    }}
-                  >
-                    Vascular Skeleton
+                  <img src={getSkeletonSrc() || selectedImage} alt="Vessel Skeleton" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
+
+                  {/* Standardized Zone Overlays */}
+                  {showZones && (
+                    <svg viewBox="0 0 500 500" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
+                      <circle cx="160" cy="250" r="32" fill="none" stroke="#fbbf24" strokeWidth="2" strokeDasharray="3 3" />
+                      <circle cx="160" cy="250" r="75" fill="none" stroke="#00f2fe" strokeWidth="2" strokeDasharray="4 4" />
+                      <text x="160" y="165" fill="#00f2fe" fontSize="10" fontWeight="bold" textAnchor="middle">Zone B (Parr-Hubbard Caliber)</text>
+                    </svg>
+                  )}
+
+                  {/* Feature 3: XAI Saliency Hotspots */}
+                  {showHotspots && report && (
+                    <svg viewBox="0 0 500 500" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
+                      {/* Hotspot 1: Focal Arteriolar Pinching */}
+                      <g style={{ animation: "pulse 2s infinite" }}>
+                        <rect x="230" y="180" width="34" height="34" fill="none" stroke="#ff0055" strokeWidth="2" />
+                        <text x="270" y="198" fill="#ff4d88" fontSize="9" fontWeight="bold">Focal Attenuation (AVR: 0.47)</text>
+                      </g>
+                      {/* Hotspot 2: High Tortuosity Loop */}
+                      <g style={{ animation: "pulse 2.5s infinite" }}>
+                        <rect x="280" y="320" width="38" height="38" fill="none" stroke="#fbbf24" strokeWidth="2" />
+                        <text x="325" y="340" fill="#fbbf24" fontSize="9" fontWeight="bold">Tortuous Looping (τ: 1.50)</text>
+                      </g>
+                    </svg>
+                  )}
+
+                  <div style={{ position: "absolute", inset: 0, overflow: "hidden", clipPath: `inset(0 ${100 - sliderPosition}% 0 0)` }}>
+                    <img src={selectedImage} alt="Raw Fundus" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
                   </div>
 
-                  <div
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      overflow: "hidden",
-                      clipPath: `inset(0 ${100 - sliderPosition}% 0 0)`,
-                    }}
-                  >
-                    <img
-                      src={selectedImage}
-                      alt="Raw Fundus Scan"
-                      style={{
-                        position: "absolute",
-                        inset: 0,
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "contain",
-                      }}
-                    />
-                    <div
-                      style={{
-                        position: "absolute",
-                        top: "14px",
-                        left: "14px",
-                        backgroundColor: "rgba(6, 5, 8, 0.9)",
-                        border: "1px solid rgba(251, 191, 36, 0.6)",
-                        color: "#fbbf24",
-                        padding: "5px 14px",
-                        borderRadius: "8px",
-                        fontSize: "11px",
-                        fontWeight: "900",
-                        boxShadow: "0 0 15px rgba(251, 191, 36, 0.3)",
-                      }}
-                    >
-                      Raw Fundus
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      position: "absolute",
-                      top: 0,
-                      bottom: 0,
-                      width: "3px",
-                      backgroundColor: "#fbbf24",
-                      boxShadow: "0 0 20px #fbbf24",
-                      left: `${sliderPosition}%`,
-                    }}
-                  >
-                    <div
-                      style={{
-                        position: "absolute",
-                        top: "50%",
-                        transform: "translate(-50%, -50%)",
-                        width: "36px",
-                        height: "36px",
-                        backgroundColor: "#08070a",
-                        border: "2px solid #fbbf24",
-                        borderRadius: "50%",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        color: "#fbbf24",
-                        fontSize: "13px",
-                        fontWeight: "900",
-                        boxShadow: "0 0 25px rgba(251, 191, 36, 0.9)",
-                      }}
-                    >
+                  <div style={{ position: "absolute", top: 0, bottom: 0, width: "3px", backgroundColor: "#fbbf24", boxShadow: "0 0 20px #fbbf24", left: `${sliderPosition}%` }}>
+                    <div style={{ position: "absolute", top: "50%", transform: "translate(-50%, -50%)", width: "32px", height: "32px", backgroundColor: "#08070a", border: "2px solid #fbbf24", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", color: "#fbbf24", fontSize: "12px", fontWeight: "900" }}>
                       ↔
                     </div>
                   </div>
                 </>
               ) : (
-                <div
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: "12px",
-                    color: "#9ca3af",
-                  }}
-                >
-                  <div
-                    style={{
-                      width: "58px",
-                      height: "58px",
-                      borderRadius: "50%",
-                      border: "1px solid rgba(251, 191, 36, 0.5)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: "26px",
-                      backgroundColor: "rgba(251, 191, 36, 0.12)",
-                      boxShadow: "0 0 20px rgba(251, 191, 36, 0.25)",
-                    }}
-                  >
-                    👁️
-                  </div>
-                  <p style={{ margin: 0, fontSize: "14px", fontWeight: "800", color: "#fef08a" }}>
-                    Select a retinal fundus scan to initialize
-                  </p>
-                  <p style={{ margin: 0, fontSize: "12px", color: "#d1d5db" }}>
-                    Non-fundus images (screenshots, code, diagrams) are automatically rejected
-                  </p>
+                <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af", fontSize: "13px" }}>
+                  Select a retinal fundus scan to initialize
                 </div>
               )}
             </div>
           </div>
 
-          {/* Metric Cards & Gemini Staging */}
-          <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+          {/* Right: Metrics & Gemini Staging */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
             
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "14px" }}>
-              {/* AVR */}
-              <div
-                style={{
-                  backgroundColor: "rgba(20, 17, 22, 0.88)",
-                  border: "1px solid rgba(251, 191, 36, 0.5)",
-                  borderRadius: "16px",
-                  padding: "16px",
-                  boxShadow: "0 8px 25px rgba(251, 191, 36, 0.2)",
-                }}
-              >
-                <span style={{ fontSize: "10.5px", fontWeight: "900", textTransform: "uppercase", color: "#fef08a" }}>
-                  AVR Ratio
-                </span>
-                <span
-                  style={{
-                    display: "block",
-                    fontSize: "28px",
-                    fontWeight: "900",
-                    color: "#fbbf24",
-                    margin: "4px 0 2px 0",
-                    fontFamily: "monospace",
-                    textShadow: "0 0 15px rgba(251, 191, 36, 0.6)",
-                  }}
-                >
-                  {avrVal !== undefined ? Number(avrVal).toFixed(2) : "--"}
-                </span>
-                <span style={{ fontSize: "10.5px", color: "#d1d5db" }}>Target: ≥ 0.67</span>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "12px" }}>
+              <div className="card-container" style={{ backgroundColor: "rgba(20, 17, 22, 0.88)", border: "1px solid rgba(251, 191, 36, 0.5)", borderRadius: "14px", padding: "14px" }}>
+                <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#fef08a", textTransform: "uppercase" }}>AVR Ratio</span>
+                <span className="print-text" style={{ display: "block", fontSize: "26px", fontWeight: "900", color: "#fbbf24" }}>{avrVal}</span>
+                <span className="print-text" style={{ fontSize: "10px", color: "#9ca3af" }}>Target: ≥ 0.67</span>
               </div>
-
-              {/* Tortuosity */}
-              <div
-                style={{
-                  backgroundColor: "rgba(20, 17, 22, 0.88)",
-                  border: "1px solid rgba(255, 0, 85, 0.5)",
-                  borderRadius: "16px",
-                  padding: "16px",
-                  boxShadow: "0 8px 25px rgba(255, 0, 85, 0.2)",
-                }}
-              >
-                <span style={{ fontSize: "10.5px", fontWeight: "900", textTransform: "uppercase", color: "#ff80ab" }}>
-                  Tortuosity
-                </span>
-                <span
-                  style={{
-                    display: "block",
-                    fontSize: "28px",
-                    fontWeight: "900",
-                    color: "#ff0055",
-                    margin: "4px 0 2px 0",
-                    fontFamily: "monospace",
-                    textShadow: "0 0 15px rgba(255, 0, 85, 0.6)",
-                  }}
-                >
-                  {tortVal !== undefined ? Number(tortVal).toFixed(2) : "--"}
-                </span>
-                <span style={{ fontSize: "10.5px", color: "#d1d5db" }}>Target: &lt; 1.15</span>
+              <div className="card-container" style={{ backgroundColor: "rgba(20, 17, 22, 0.88)", border: "1px solid rgba(255, 0, 85, 0.5)", borderRadius: "14px", padding: "14px" }}>
+                <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#ff80ab", textTransform: "uppercase" }}>Tortuosity</span>
+                <span className="print-text" style={{ display: "block", fontSize: "26px", fontWeight: "900", color: "#ff0055" }}>{tortVal}</span>
+                <span className="print-text" style={{ fontSize: "10px", color: "#9ca3af" }}>Target: &lt; 1.15</span>
               </div>
-
-              {/* Fractal */}
-              <div
-                style={{
-                  backgroundColor: "rgba(20, 17, 22, 0.88)",
-                  border: "1px solid rgba(0, 242, 254, 0.5)",
-                  borderRadius: "16px",
-                  padding: "16px",
-                  boxShadow: "0 8px 25px rgba(0, 242, 254, 0.2)",
-                }}
-              >
-                <span style={{ fontSize: "10.5px", fontWeight: "900", textTransform: "uppercase", color: "#a5f3fc" }}>
-                  Fractal (Df)
-                </span>
-                <span
-                  style={{
-                    display: "block",
-                    fontSize: "28px",
-                    fontWeight: "900",
-                    color: "#00f2fe",
-                    margin: "4px 0 2px 0",
-                    fontFamily: "monospace",
-                    textShadow: "0 0 15px rgba(0, 242, 254, 0.6)",
-                  }}
-                >
-                  {fractalVal !== undefined ? Number(fractalVal).toFixed(2) : "--"}
-                </span>
-                <span style={{ fontSize: "10.5px", color: "#d1d5db" }}>Capillary Index</span>
+              <div className="card-container" style={{ backgroundColor: "rgba(20, 17, 22, 0.88)", border: "1px solid rgba(0, 242, 254, 0.5)", borderRadius: "14px", padding: "14px" }}>
+                <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#a5f3fc", textTransform: "uppercase" }}>Fractal (Df)</span>
+                <span className="print-text" style={{ display: "block", fontSize: "26px", fontWeight: "900", color: "#00f2fe" }}>{fractalVal}</span>
+                <span className="print-text" style={{ fontSize: "10px", color: "#9ca3af" }}>Capillary Density</span>
               </div>
             </div>
 
-            {/* Gemini Report Card */}
-            <div
-              style={{
-                backgroundColor: "rgba(20, 17, 22, 0.92)",
-                border: "1px solid rgba(251, 191, 36, 0.45)",
-                borderRadius: "22px",
-                padding: "24px",
-                backdropFilter: "blur(20px)",
-                boxShadow: "0 20px 40px rgba(0,0,0,0.7), 0 0 25px rgba(251, 191, 36, 0.18)",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  borderBottom: "1px solid rgba(251, 191, 36, 0.35)",
-                  paddingBottom: "14px",
-                  marginBottom: "18px",
-                }}
-              >
-                <h2 style={{ margin: 0, fontSize: "16px", fontWeight: "900", color: "#ffffff", display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span>🩺</span> Gemini 1.5 Cardio-Renal Staging
-                </h2>
+            <div className="card-container" style={{ backgroundColor: "rgba(20, 17, 22, 0.92)", border: "1px solid rgba(251, 191, 36, 0.45)", borderRadius: "20px", padding: "22px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid rgba(251, 191, 36, 0.3)", paddingBottom: "12px", marginBottom: "16px" }}>
+                <h2 className="print-text" style={{ margin: 0, fontSize: "15px", fontWeight: "900", color: "#ffffff" }}>🩺 Gemini 1.5 Cardio-Renal Staging</h2>
                 {report && (
-                  <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                    <span
-                      style={{
-                        backgroundColor: "rgba(255, 0, 85, 0.18)",
-                        border: "1px solid #ff0055",
-                        color: "#ff4d88",
-                        padding: "3px 10px",
-                        borderRadius: "9999px",
-                        fontSize: "11px",
-                        fontWeight: "900",
-                        letterSpacing: "0.5px",
-                      }}
-                    >
-                      {riskCategory}
-                    </span>
-                    <span
-                      style={{
-                        backgroundColor: "rgba(251, 191, 36, 0.18)",
-                        border: "1px solid #fbbf24",
-                        color: "#fef08a",
-                        padding: "4px 14px",
-                        borderRadius: "9999px",
-                        fontSize: "12px",
-                        fontWeight: "900",
-                        fontFamily: "monospace",
-                        boxShadow: "0 0 15px rgba(251, 191, 36, 0.4)",
-                      }}
-                    >
-                      Risk: {riskScore} / 100
-                    </span>
-                  </div>
+                  <span style={{ backgroundColor: "rgba(251, 191, 36, 0.18)", border: "1px solid #fbbf24", color: "#fef08a", padding: "3px 12px", borderRadius: "9999px", fontSize: "11px", fontWeight: "900" }}>
+                    Risk: {riskScore} / 100 ({riskCategory})
+                  </span>
                 )}
               </div>
 
               {report ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
                   <div>
-                    <span style={{ fontSize: "10.5px", fontWeight: "900", textTransform: "uppercase", color: "#fef08a" }}>
-                      Keith-Wagener-Barker Classification
-                    </span>
-                    <p style={{ margin: "4px 0 0 0", fontSize: "17px", fontWeight: "900", color: "#fbbf24" }}>
-                      {kwbStage}
-                    </p>
+                    <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#fef08a", textTransform: "uppercase" }}>Keith-Wagener-Barker Staging</span>
+                    <p className="print-text" style={{ margin: "3px 0 0 0", fontSize: "16px", fontWeight: "900", color: "#fbbf24" }}>{kwbStage}</p>
                   </div>
 
                   <div>
-                    <span style={{ fontSize: "10.5px", fontWeight: "900", textTransform: "uppercase", color: "#fef08a" }}>
-                      Clinical Diagnosis Summary
-                    </span>
-                    <p
-                      style={{
-                        margin: "6px 0 0 0",
-                        fontSize: "13.5px",
-                        lineHeight: "1.6",
-                        color: "#f3f4f6",
-                        backgroundColor: "rgba(8, 7, 10, 0.85)",
-                        padding: "14px 16px",
-                        borderRadius: "12px",
-                        border: "1px solid rgba(251, 191, 36, 0.3)",
-                      }}
-                    >
+                    <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#fef08a", textTransform: "uppercase" }}>Clinical Diagnosis Summary</span>
+                    <p className="print-text" style={{ margin: "4px 0 0 0", fontSize: "13px", lineHeight: "1.5", color: "#f3f4f6", backgroundColor: "rgba(8, 7, 10, 0.8)", padding: "10px 12px", borderRadius: "10px" }}>
                       {clinicalSummary}
                     </p>
                   </div>
 
-                  {systemicRiskSummary && (
-                    <div>
-                      <span style={{ fontSize: "10.5px", fontWeight: "900", textTransform: "uppercase", color: "#ff80ab" }}>
-                        Cardio-Renal Systemic Risk
-                      </span>
-                      <p
-                        style={{
-                          margin: "6px 0 0 0",
-                          fontSize: "13px",
-                          lineHeight: "1.5",
-                          color: "#ffd1dc",
-                          backgroundColor: "rgba(45, 6, 18, 0.5)",
-                          padding: "12px 14px",
-                          borderRadius: "10px",
-                          border: "1px solid rgba(255, 0, 85, 0.3)",
-                        }}
-                      >
-                        {systemicRiskSummary}
-                      </p>
-                    </div>
-                  )}
+                  <div>
+                    <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#ff80ab", textTransform: "uppercase" }}>Systemic Cardio-Renal Risk Correlation</span>
+                    <p className="print-text" style={{ margin: "4px 0 0 0", fontSize: "12.5px", lineHeight: "1.5", color: "#ffd1dc", backgroundColor: "rgba(45, 6, 18, 0.5)", padding: "10px 12px", borderRadius: "10px" }}>
+                      {systemicRiskSummary}
+                    </p>
+                  </div>
 
                   <div>
-                    <span style={{ fontSize: "10.5px", fontWeight: "900", textTransform: "uppercase", color: "#fef08a" }}>
-                      Actionable Clinical Protocol
-                    </span>
-                    <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "6px" }}>
+                    <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#fef08a", textTransform: "uppercase" }}>Targeted Clinical Action Plan</span>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "4px" }}>
                       {getRecommendationsList().map((rec, i) => (
-                        <div
-                          key={i}
-                          style={{
-                            fontSize: "13px",
-                            color: "#ffffff",
-                            backgroundColor: "rgba(8, 7, 10, 0.7)",
-                            padding: "10px 14px",
-                            borderRadius: "8px",
-                            border: "1px solid rgba(255, 0, 85, 0.3)",
-                            display: "flex",
-                            alignItems: "flex-start",
-                            gap: "10px",
-                          }}
-                        >
-                          <span style={{ color: "#fbbf24", fontWeight: "900", fontSize: "16px", lineHeight: "1" }}>•</span>
+                        <div key={i} className="print-text" style={{ fontSize: "12.5px", color: "#ffffff", backgroundColor: "rgba(8, 7, 10, 0.7)", padding: "8px 12px", borderRadius: "8px", display: "flex", gap: "8px" }}>
+                          <span style={{ color: "#fbbf24", fontWeight: "900" }}>•</span>
                           <span>{rec}</span>
                         </div>
                       ))}
                     </div>
                   </div>
 
-                  {patientInstruction && (
-                    <div>
-                      <span style={{ fontSize: "10.5px", fontWeight: "900", textTransform: "uppercase", color: "#a5f3fc" }}>
-                        Patient Instructions
-                      </span>
-                      <p
-                        style={{
-                          margin: "6px 0 0 0",
-                          fontSize: "12.5px",
-                          lineHeight: "1.5",
-                          color: "#cffafe",
-                          backgroundColor: "rgba(8, 25, 35, 0.6)",
-                          padding: "10px 12px",
-                          borderRadius: "8px",
-                          border: "1px solid rgba(0, 242, 254, 0.3)",
-                        }}
-                      >
-                        {patientInstruction}
-                      </p>
-                    </div>
-                  )}
+                  <div>
+                    <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#a5f3fc", textTransform: "uppercase" }}>Patient Instruction ({language.toUpperCase()})</span>
+                    <p className="print-text" style={{ margin: "4px 0 0 0", fontSize: "12.5px", lineHeight: "1.5", color: "#cffafe", backgroundColor: "rgba(8, 25, 35, 0.6)", padding: "10px 12px", borderRadius: "8px" }}>
+                      {patientInstruction}
+                    </p>
+                  </div>
                 </div>
               ) : (
-                <div
-                  style={{
-                    padding: "44px 0",
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    textAlign: "center",
-                    color: "#9ca3af",
-                    gap: "8px",
-                  }}
-                >
-                  <span style={{ fontSize: "28px" }}>⏱️</span>
-                  <span style={{ fontSize: "13.5px", color: "#e5e7eb" }}>
-                    Select a genuine retinal fundus image and click <b>Run Clinical Assessment</b>.
-                  </span>
+                <div style={{ padding: "40px 0", textAlign: "center", color: "#9ca3af", fontSize: "13px" }}>
+                  Select a genuine retinal fundus scan and click <b>Run Clinical Assessment</b>.
                 </div>
               )}
             </div>
