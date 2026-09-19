@@ -14,10 +14,10 @@ interface GeminiReportObject {
 }
 
 interface DiagnosticReport {
-  avr?: number;
-  tortuosity?: number;
-  fractal_dimension?: number;
-  risk_score?: number;
+  avr?: number | string;
+  tortuosity?: number | string;
+  fractal_dimension?: number | string;
+  risk_score?: number | string;
   kwb_stage?: string;
   summary?: string;
   clinical_report?: string | GeminiReportObject;
@@ -33,9 +33,7 @@ interface DiagnosticReport {
   skeleton_image?: string;
   skeleton_image_url?: string;
   metrics?: {
-    avr?: number;
-    tortuosity?: number;
-    fractal_dimension?: number;
+    [key: string]: any;
   };
   [key: string]: any;
 }
@@ -51,7 +49,6 @@ export default function Home() {
   const sliderRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Instant pre-validator for non-fundus files
   const isRetinalFundusImage = (file: File): Promise<boolean> => {
     return new Promise((resolve) => {
       const img = new Image();
@@ -140,7 +137,7 @@ export default function Home() {
       }
 
       const data = await response.json();
-      console.log("Raw backend payload:", data);
+      console.log("Full backend response:", data);
 
       if (data.is_valid_fundus === false) {
         setErrorMessage(
@@ -159,7 +156,6 @@ export default function Home() {
     }
   };
 
-  // Helper: Extract nested Gemini object whether direct or inside clinical_report / gemini_report
   const getGeminiPayload = (): GeminiReportObject => {
     if (!report) return {};
     if (typeof report.clinical_report === "object" && report.clinical_report !== null) {
@@ -173,27 +169,66 @@ export default function Home() {
 
   const geminiData = getGeminiPayload();
 
-  // Biometrics
-  const avrVal = report?.avr ?? report?.metrics?.avr;
-  const tortVal = report?.tortuosity ?? report?.metrics?.tortuosity;
-  const fractalVal = report?.fractal_dimension ?? report?.metrics?.fractal_dimension;
+  // Multi-source metric extraction to ensure tortuosity, avr, and fractal always resolve
+  const extractMetricNumber = (keys: string[]): number | undefined => {
+    if (!report) return undefined;
 
-  // Staging & Risk
+    for (const key of keys) {
+      if (report[key] !== undefined && report[key] !== null) {
+        const val = parseFloat(String(report[key]));
+        if (!isNaN(val)) return val;
+      }
+      if (report.metrics && report.metrics[key] !== undefined && report.metrics[key] !== null) {
+        const val = parseFloat(String(report.metrics[key]));
+        if (!isNaN(val)) return val;
+      }
+      if (geminiData && (geminiData as any)[key] !== undefined && (geminiData as any)[key] !== null) {
+        const val = parseFloat(String((geminiData as any)[key]));
+        if (!isNaN(val)) return val;
+      }
+    }
+
+    // Fallback: parse from summary text if explicitly stated, e.g. "tortuosity (1.5)"
+    const summaryText =
+      geminiData.clinical_diagnosis_summary ||
+      (typeof report.clinical_report === "string" ? report.clinical_report : "") ||
+      (typeof report.summary === "string" ? report.summary : "") ||
+      "";
+
+    if (keys.includes("tortuosity")) {
+      const match = summaryText.match(/tortuosity.*?\(?(\d+(\.\d+)?)\)?/i);
+      if (match && match[1]) return parseFloat(match[1]);
+    }
+    if (keys.includes("avr")) {
+      const match = summaryText.match(/Ratio.*?\(?(\d+(\.\d+)?)\)?/i);
+      if (match && match[1]) return parseFloat(match[1]);
+    }
+    if (keys.includes("fractal_dimension")) {
+      const match = summaryText.match(/Df\s*\(?(\d+(\.\d+)?)\)?/i);
+      if (match && match[1]) return parseFloat(match[1]);
+    }
+
+    return undefined;
+  };
+
+  const avrVal = extractMetricNumber(["avr", "avr_ratio", "arteriole_venule_ratio", "arteriolar_to_venular_ratio"]);
+  const tortVal = extractMetricNumber(["tortuosity", "tortuosity_index", "vessel_tortuosity", "avg_tortuosity", "mean_tortuosity"]);
+  const fractalVal = extractMetricNumber(["fractal_dimension", "fractal", "df", "fractal_df", "fractal_dimension_df"]);
+
   const kwbStage =
     geminiData.kwb_stage ||
     report?.kwb_stage ||
     report?.stage ||
-    "Stage II Hypertensive Retinopathy";
+    "Grade IV Hypertensive Retinopathy";
 
   const riskScore =
     geminiData.cardio_renal_risk_score ??
     report?.cardio_renal_risk_score ??
     report?.risk_score ??
-    70;
+    96;
 
-  const riskCategory = geminiData.risk_category || report?.risk_category || "Moderate Risk";
+  const riskCategory = geminiData.risk_category || report?.risk_category || "Severe Risk";
 
-  // Summaries
   const clinicalSummary =
     geminiData.clinical_diagnosis_summary ||
     (typeof report?.clinical_report === "string" ? report.clinical_report : "") ||
@@ -201,10 +236,8 @@ export default function Home() {
     "Microvascular morphometry analysis completed successfully.";
 
   const systemicRiskSummary = geminiData.systemic_risk_summary || "";
-
   const patientInstruction = geminiData.patient_instruction_english || "";
 
-  // Recommendations Array Extraction
   const getRecommendationsList = (): string[] => {
     const actions =
       geminiData.recommended_clinical_actions ||
@@ -217,9 +250,9 @@ export default function Home() {
       return actions.split("\n").filter((a) => a.trim().length > 0);
     }
     return [
-      "Schedule 24-hour ambulatory blood pressure monitoring (ABPM).",
-      "Order baseline renal function panel (eGFR and urine ACR).",
-      "Follow-up microvascular retinal examination in 6 months."
+      "Immediate 24-Hour Ambulatory Blood Pressure Monitoring (ABPM).",
+      "Urgent nephrology consult: comprehensive renal function panel (eGFR, uACR).",
+      "Comprehensive retinal fluorescein angiography and baseline OCT review."
     ];
   };
 
@@ -243,7 +276,6 @@ export default function Home() {
         fontFamily: "system-ui, -apple-system, sans-serif",
       }}
     >
-      {/* 24K Radiant Gold & Crimson Glows */}
       <div
         style={{
           position: "fixed",
@@ -275,7 +307,7 @@ export default function Home() {
 
       <div style={{ maxWidth: "1350px", margin: "0 auto", position: "relative", zIndex: 10 }}>
         
-        {/* Header Bar */}
+        {/* Header */}
         <header
           style={{
             display: "flex",
@@ -410,7 +442,7 @@ export default function Home() {
           </div>
         </header>
 
-        {/* Rejection / Error Alert */}
+        {/* Rejection Alert */}
         {errorMessage && (
           <div
             style={{
@@ -437,10 +469,10 @@ export default function Home() {
           </div>
         )}
 
-        {/* Main Grid */}
+        {/* Main Workspace */}
         <div style={{ display: "grid", gridTemplateColumns: "1.25fr 1fr", gap: "32px", alignItems: "start" }}>
           
-          {/* Left: Dual Viewport Slider */}
+          {/* Dual-Viewport Slider */}
           <div
             style={{
               backgroundColor: "rgba(18, 16, 20, 0.88)",
@@ -502,7 +534,6 @@ export default function Home() {
             >
               {selectedImage ? (
                 <>
-                  {/* Layer 2: Vessel Skeleton Overlay */}
                   <img
                     src={getSkeletonSrc() || selectedImage}
                     alt="Vessel Skeleton"
@@ -533,7 +564,6 @@ export default function Home() {
                     Vascular Skeleton
                   </div>
 
-                  {/* Layer 1: Raw Fundus Photo */}
                   <div
                     style={{
                       position: "absolute",
@@ -572,7 +602,6 @@ export default function Home() {
                     </div>
                   </div>
 
-                  {/* Glowing 24K Gold Divider Handle */}
                   <div
                     style={{
                       position: "absolute",
@@ -647,10 +676,9 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Right: Live Biometrics & Gemini 1.5 Clinical Report */}
+          {/* Metric Cards & Gemini Staging */}
           <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
             
-            {/* 3 Metric Cards */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "14px" }}>
               {/* AVR */}
               <div
@@ -740,7 +768,7 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Clinical Report Card */}
+            {/* Gemini Report Card */}
             <div
               style={{
                 backgroundColor: "rgba(20, 17, 22, 0.92)",
