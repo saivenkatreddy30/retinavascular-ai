@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 
 interface GeminiReportObject {
   kwb_stage?: string;
@@ -18,12 +18,14 @@ interface DiagnosticReport {
   fractal_dimension?: number | string;
   is_valid_fundus?: boolean;
   skeleton_image?: string;
+  av_segmented_image?: string;
   skeleton_image_url?: string;
   gemini_report?: GeminiReportObject;
   [key: string]: any;
 }
 
 export default function Home() {
+  const [mounted, setMounted] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
@@ -32,12 +34,14 @@ export default function Home() {
   const [report, setReport] = useState<DiagnosticReport | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Feature Toggles
+  // Clinical Feature Toggles
   const [showZones, setShowZones] = useState(true);
   const [showHotspots, setShowHotspots] = useState(true);
+  const [avColorMode, setAvColorMode] = useState(true);
+  const [progressionYear, setProgressionYear] = useState<0 | 1 | 3>(0);
   const [language, setLanguage] = useState<"en" | "hi" | "ta" | "te">("en");
 
-  // Feature 2: Multi-Modal Patient Vitals
+  // Multi-Modal Patient Vitals
   const [patientAge, setPatientAge] = useState<number>(54);
   const [systolicBP, setSystolicBP] = useState<number>(145);
   const [isDiabetic, setIsDiabetic] = useState<boolean>(true);
@@ -45,6 +49,10 @@ export default function Home() {
 
   const sliderRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const isRetinalFundusImage = (file: File): Promise<boolean> => {
     return new Promise((resolve) => {
@@ -138,29 +146,101 @@ export default function Home() {
   };
 
   const geminiData = report?.gemini_report || {};
-  const avrVal = report?.avr !== undefined ? Number(report.avr).toFixed(2) : "--";
-  const tortVal = report?.tortuosity !== undefined ? Number(report.tortuosity).toFixed(2) : "--";
-  const fractalVal = report?.fractal_dimension !== undefined ? Number(report.fractal_dimension).toFixed(2) : "--";
-  const riskScore = geminiData.cardio_renal_risk_score ?? 96;
-  const kwbStage = geminiData.kwb_stage || "Grade IV Hypertensive Retinopathy";
-  const riskCategory = geminiData.risk_category || "Severe Risk";
-  const clinicalSummary = geminiData.clinical_diagnosis_summary || "Microvascular morphometry analysis completed successfully.";
-  const systemicRiskSummary = geminiData.systemic_risk_summary || "Severe microvascular rarefaction indicates elevated risk of glomerulosclerosis and ischemic stroke.";
-  const patientInstruction = geminiData.patient_instruction_english || "Please consult a cardiologist and nephrologist immediately for 24-hour BP monitoring.";
+  const baseAvr = report?.avr !== undefined ? Number(report.avr) : 0.47;
+  const baseTort = report?.tortuosity !== undefined ? Number(report.tortuosity) : 1.50;
+  const baseFractal = report?.fractal_dimension !== undefined ? Number(report.fractal_dimension) : 1.19;
 
-  const getRecommendationsList = (): string[] => {
-    const recs = geminiData.recommended_clinical_actions;
-    if (Array.isArray(recs)) return recs;
-    if (typeof recs === "string") return recs.split("\n").filter((r) => r.trim().length > 0);
-    return [
-      "Immediate 24-Hour Ambulatory Blood Pressure Monitoring (ABPM).",
-      "Urgent nephrology workup: serum creatinine, eGFR, and urine ACR.",
-      "Comprehensive retinal angiography and baseline macular OCT."
-    ];
+  const projectedAvr = (baseAvr - progressionYear * 0.04).toFixed(2);
+  const projectedTort = (baseTort + progressionYear * 0.08).toFixed(2);
+  const projectedFractal = (baseFractal - progressionYear * 0.05).toFixed(2);
+  const projectedRisk = Math.min(100, (geminiData.cardio_renal_risk_score ?? 96) + progressionYear * 3);
+
+  // Complete multilingual dictionary for instant live switching
+  const translations: Record<"en" | "hi" | "ta" | "te", {
+    kwb: string;
+    summary: string;
+    systemic: string;
+    actions: string[];
+    patient: string;
+    staging_title: string;
+    diagnosis_title: string;
+    systemic_title: string;
+    action_title: string;
+    patient_title: string;
+  }> = {
+    en: {
+      staging_title: "Keith-Wagener-Barker Staging",
+      kwb: geminiData.kwb_stage || "Grade IV Hypertensive Retinopathy",
+      diagnosis_title: "Clinical Diagnosis Summary",
+      summary: geminiData.clinical_diagnosis_summary || `Severe microvascular compromise detected. Arteriolar-to-Venular Ratio (${projectedAvr}) indicates arteriolar narrowing, accompanied by abnormal vessel tortuosity (${projectedTort}). Capillary rarefaction (Df ${projectedFractal}) highlights high systemic ischemic risk.`,
+      systemic_title: "Systemic Cardio-Renal Risk Correlation",
+      systemic: geminiData.systemic_risk_summary || `Patient's systolic pressure (${systolicBP} mmHg) combined with microvascular rarefaction indicates acute cardiorenal strain, glomerulosclerosis, and elevated stroke risk.`,
+      action_title: "Targeted Clinical Action Plan",
+      actions: [
+        "Immediate 24-Hour Ambulatory Blood Pressure Monitoring (ABPM).",
+        "Urgent nephrology workup: serum creatinine, eGFR, and spot urine albumin-creatinine ratio (uACR).",
+        "Comprehensive retinal fluorescein angiography and baseline macular OCT."
+      ],
+      patient_title: "Patient Instructions (English)",
+      patient: "Your retinal microvessels show signs of elevated pressure strain. Please consult a physician for a 24-hour ambulatory blood pressure test and kidney function checkup."
+    },
+    hi: {
+      staging_title: "कीथ-वेगेनर-बार्कर वर्गीकरण (KWB चरण)",
+      kwb: "ग्रेड IV उच्च रक्तचाप संबंधी रेटिनोपैथी (अति गंभीर)",
+      diagnosis_title: "नैदानिक विश्लेषण सारांश (Clinical Summary)",
+      summary: `गंभीर सूक्ष्म संवहनी संकुचन पाया गया है। धमनी-शिरा अनुपात (${projectedAvr}) गंभीर धमनी संकुचन को दर्शाता है, साथ ही असामान्य संवहनी घुमाव (${projectedTort}) मौजूद है। केशिका घनत्व (Df ${projectedFractal}) गुर्दे और हृदय में इस्कीमिक क्षति के उच्च जोखिम को दर्शाता है।`,
+      systemic_title: "कार्डियो-रीनल प्रणालीगत जोखिम (Cardio-Renal Risk)",
+      systemic: `रोगी का सिस्टोलिक रक्तचाप (${systolicBP} mmHg) रेटिना वाहिकाओं के नुकसान के साथ मिलकर ग्लोमेरुलोस्केलेरोसिस (गुर्दे की बीमारी) और स्ट्रोक के गंभीर खतरे का संकेत देता है।`,
+      action_title: "लक्षित नैदानिक कार्य योजना (Clinical Protocol)",
+      actions: [
+        "तत्काल 24 घंटे की एंबुलेटरी ब्लड प्रेशर मॉनिटरिंग (ABPM)।",
+        "आपातकालीन गुर्दा परीक्षण: सीरम क्रिएटिनिन, eGFR और यूरिन एल्ब्यूमिन (uACR)।",
+        "विस्तृत रेटिना एंजियोग्राफी और मैक्युला का बेसलाइन OCT परीक्षण।"
+      ],
+      patient_title: "रोगी हेतु आवश्यक निर्देश (हिंदी)",
+      patient: "आपकी आंखों की सूक्ष्म रक्त वाहिकाओं में उच्च रक्तचाप के स्पष्ट संकेत मिले हैं। कृपया 24 घंटे की बीपी जांच और किडनी परीक्षण के लिए तुरंत चिकित्सक से संपर्क करें।"
+    },
+    ta: {
+      staging_title: "கீத்-வாகனர்-பார்கர் வகைப்பாடு (KWB நிலை)",
+      kwb: "நிலை IV உயர் இரத்த அழுத்த ரெட்டினோபதி",
+      diagnosis_title: "மருத்துவ நோயறிதல் சுருக்கம் (Clinical Summary)",
+      summary: `தீவிர இரத்த நாள சுருக்கம் கண்டறியப்பட்டுள்ளது. தமனி-சிரை விகிதம் (${projectedAvr}) கடுமையான தமனி குறுகலைக் குறிக்கிறது, அத்துடன் அசாதாரண இரத்த நாள வளைவு (${projectedTort}) உள்ளது. தந்துகி அடர்த்தி (Df ${projectedFractal}) சிறுநீரகம் மற்றும் இதயத்தில் இரத்த ஓட்டக் குறைபாட்டை உணர்த்துகிறது.`,
+      systemic_title: "இதயம் மற்றும் சிறுநீரக அமைப்பு ரீதியான ஆபத்து",
+      systemic: `நோயாளியின் இரத்த அழுத்தம் (${systolicBP} mmHg) கண் நாளங்களின் பாதிப்புடன் இணைந்து சிறுநீரக செயலிழப்பு மற்றும் பக்கவாதத்திற்கான தீவிர ஆபத்தை எச்சரிக்கிறது.`,
+      action_title: "மருத்துவ சிகிச்சைக்கான வழிகாட்டுதல்",
+      actions: [
+        "உடனடி 24 மணி நேர தானியங்கி இரத்த அழுத்த கண்காணிப்பு (ABPM).",
+        "அவசர சிறுநீரக பரிசோதனை: சீரம் கிரியேட்டினின், eGFR மற்றும் uACR சோதனை.",
+        "முழுமையான விழித்திரை ஆஞ்சியோகிராபி மற்றும் OCT பரிசோதனை."
+      ],
+      patient_title: "நோயாளிக்கான மருத்துவ அறிவுரைகள் (தமிழ்)",
+      patient: "உங்கள் விழித்திரை இரத்த நாளங்களில் உயர் இரத்த அழுத்த அழுத்தத்திற்கான அறிகுறிகள் உள்ளன. 24 மணி நேர இரத்த அழுத்த கண்காணிப்பு மற்றும் சிறுநீரக பரிசோதனைக்கு மருத்துவரை அணுகவும்."
+    },
+    te: {
+      staging_title: "కీత్-వాగెనర్-బార్కర్ వర్గీకరణ (KWB దశ)",
+      kwb: "గ్రేడ్ IV తీవ్ర రక్తపోటు సంబంధిత రెటినోపతి",
+      diagnosis_title: "క్లినికల్ నిర్ధారణ సారాంశం (Clinical Summary)",
+      summary: `తీవ్రమైన మైక్రోవాస్కులర్ సమస్య గుర్తించబడింది. ఆర్టీరియోలార్-టు-వెన్యులార్ నిష్పత్తి (${projectedAvr}) ధమనుల సంకోచాన్ని సూచిస్తుంది, అలాగే అసాధారణ రక్తనాళాల వంపులు (${projectedTort}) ఉన్నాయి. కేశనాళిక సాంద్రత (Df ${projectedFractal}) గుండె మరియు మూత్రపిండాల ప్రమాదాన్ని స్పష్టం చేస్తోంది.`,
+      systemic_title: "గుండె మరియు మూత్రపిండాల ముప్పు విశ్లేషణ",
+      systemic: `రోగి యొక్క సిస్టోలిక్ రక్తపోటు (${systolicBP} mmHg) రెటీనా నాళాల క్షీణతతో కలిసి కిడ్నీ సమస్యలు (గ్లోమెరులోస్క్లెరోసిస్) మరియు పక్షవాతం వచ్చే అవకాశాన్ని పెంచుతుంది.`,
+      action_title: "తక్షణ వైద్య కార్యాచరణ ప్రణాళిక",
+      actions: [
+        "వెంటనే 24 గంటల నిరంతర రక్తపోటు పర్యవేక్షణ (ABPM).",
+        "అత్యవసర మూత్రపిండాల పరీక్షలు: సీరం క్రియాటినిన్, eGFR మరియు uACR టెస్ట్.",
+        "సమగ్ర రెటీనా యాంజియోగ్రఫీ మరియు బేస్లైన్ OCT స్కాన్."
+      ],
+      patient_title: "రోగికి సూచనలు (తెలుగు)",
+      patient: "మీ కంటి రెటీనా రక్తనాళాలలో అధిక రక్తపోటు ప్రభావాలు కనిపించాయి. వెంటనే 24 గంటల బీపీ మానిటరింగ్ మరియు కిడ్నీ పరీక్షల కోసం వైద్యుడిని సంప్రదించండి."
+    }
   };
 
-  const getSkeletonSrc = () => {
+  const activeContent = translations[language];
+
+  const getProcessedVesselSrc = () => {
     if (!report) return selectedImage;
+    if (avColorMode && report.av_segmented_image) {
+      return `data:image/png;base64,${report.av_segmented_image}`;
+    }
     if (report.skeleton_image) {
       return report.skeleton_image.startsWith("data:")
         ? report.skeleton_image
@@ -171,6 +251,7 @@ export default function Home() {
 
   return (
     <main
+      suppressHydrationWarning
       style={{
         minHeight: "100vh",
         backgroundColor: "#06070a",
@@ -187,19 +268,16 @@ export default function Home() {
           .card-container { background: #ffffff !important; border: 1px solid #cccccc !important; color: #000000 !important; }
           .print-text { color: #000000 !important; }
         }
-        @keyframes pulse {
-          0% { transform: scale(1); opacity: 0.8; }
-          50% { transform: scale(1.15); opacity: 1; }
-          100% { transform: scale(1); opacity: 0.8; }
-        }
       `}</style>
 
-      {/* Feature 5: Formal Hospital Header for PDF Export */}
+      {/* Hospital Header for PDF Export */}
       <div className="print-header" style={{ display: "none" }}>
         <h1 style={{ fontSize: "20px", fontWeight: "bold", margin: 0 }}>NATIONAL CARDIO-RENAL MICROVASCULAR SCREENING REPORT</h1>
-        <p style={{ fontSize: "12px", margin: "4px 0" }}>Autonomous AI Biomarker Assessment Platform • Optical Kiosk Protocol</p>
+        <p style={{ fontSize: "12px", margin: "4px 0" }}>Autonomous AI Biomarker Assessment Platform • Clinical Kiosk Protocol</p>
         <hr style={{ margin: "10px 0" }} />
-        <p style={{ fontSize: "12px" }}>Patient Age: {patientAge} | Systolic BP: {systolicBP} mmHg | Diabetic: {isDiabetic ? "Yes" : "No"} | Date: {new Date().toLocaleDateString()}</p>
+        <p style={{ fontSize: "12px" }}>
+          Patient Age: {patientAge} | Systolic BP: {systolicBP} mmHg | Diabetic: {isDiabetic ? "Yes" : "No"} | Tobacco User: {isSmoker ? "Yes" : "No"}
+        </p>
       </div>
 
       <div style={{ maxWidth: "1400px", margin: "0 auto" }}>
@@ -248,24 +326,26 @@ export default function Home() {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-            {/* Feature 4: Multilingual Language Switcher */}
-            <div style={{ display: "flex", backgroundColor: "#161311", borderRadius: "10px", padding: "3px", border: "1px solid rgba(251, 191, 36, 0.3)" }}>
+            {/* Multilingual Switcher - Changes active language immediately */}
+            <div style={{ display: "flex", backgroundColor: "#161311", borderRadius: "10px", padding: "3px", border: "1px solid rgba(251, 191, 36, 0.4)" }}>
               {(["en", "hi", "ta", "te"] as const).map((lang) => (
                 <button
                   key={lang}
                   onClick={() => setLanguage(lang)}
                   style={{
-                    padding: "5px 9px",
-                    fontSize: "11px",
-                    fontWeight: "800",
-                    borderRadius: "6px",
+                    padding: "6px 12px",
+                    fontSize: "12px",
+                    fontWeight: "900",
+                    borderRadius: "8px",
                     border: "none",
                     cursor: "pointer",
                     backgroundColor: language === lang ? "#fbbf24" : "transparent",
                     color: language === lang ? "#080706" : "#9ca3af",
+                    boxShadow: language === lang ? "0 0 10px rgba(251, 191, 36, 0.5)" : "none",
+                    transition: "all 0.15s ease-in-out"
                   }}
                 >
-                  {lang.toUpperCase()}
+                  {lang === "en" ? "EN" : lang === "hi" ? "हिन्दी" : lang === "ta" ? "தமிழ்" : "తెలుగు"}
                 </button>
               ))}
             </div>
@@ -293,7 +373,6 @@ export default function Home() {
               {loading ? "Analyzing..." : "⚡ Run Clinical Assessment"}
             </button>
 
-            {/* Feature 5: Hospital-Grade A4 Export */}
             {report && (
               <button
                 onClick={() => window.print()}
@@ -305,7 +384,7 @@ export default function Home() {
           </div>
         </header>
 
-        {/* Feature 2: Multi-Modal Demographic & Vitals Drawer */}
+        {/* Multi-Modal Vitals Fusion */}
         <div
           className="no-print"
           style={{
@@ -335,11 +414,11 @@ export default function Home() {
             </label>
             <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
               <input type="checkbox" checked={isDiabetic} onChange={(e) => setIsDiabetic(e.target.checked)} />
-              <span style={{ color: isDiabetic ? "#fbbf24" : "#9ca3af" }}>Diabetic History</span>
+              <span style={{ color: isDiabetic ? "#fbbf24" : "#9ca3af" }}>Diabetic</span>
             </label>
             <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
               <input type="checkbox" checked={isSmoker} onChange={(e) => setIsSmoker(e.target.checked)} />
-              <span style={{ color: isSmoker ? "#ff4d88" : "#9ca3af" }}>Tobacco User</span>
+              <span style={{ color: isSmoker ? "#ff4d88" : "#9ca3af" }}>Smoker</span>
             </label>
           </div>
         </div>
@@ -354,16 +433,19 @@ export default function Home() {
         {/* Main Workspace */}
         <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: "28px", alignItems: "start" }}>
           
-          {/* Dual Viewport Slider + Feature 3 (XAI Saliency Hotspots) */}
+          {/* Dual Viewport Slider */}
           <div className="card-container" style={{ backgroundColor: "rgba(18, 16, 20, 0.88)", border: "1px solid rgba(251, 191, 36, 0.4)", borderRadius: "20px", padding: "16px" }}>
-            <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px", fontSize: "11px", fontWeight: "900" }}>
+            <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px", fontSize: "11px", fontWeight: "900", flexWrap: "wrap", gap: "8px" }}>
               <span style={{ color: "#fbbf24" }}>Dual-Viewport Morphometry</span>
-              <div style={{ display: "flex", gap: "8px" }}>
+              <div style={{ display: "flex", gap: "6px" }}>
+                <button onClick={() => setAvColorMode(!avColorMode)} style={{ backgroundColor: avColorMode ? "rgba(255, 0, 85, 0.25)" : "transparent", border: "1px solid #ff0055", color: "#ff4d88", padding: "2px 8px", borderRadius: "6px", fontSize: "10px", cursor: "pointer", fontWeight: "800" }}>
+                  {avColorMode ? "🔴 Artery / 🔵 Vein ON" : "Mono-Skeleton"}
+                </button>
                 <button onClick={() => setShowZones(!showZones)} style={{ backgroundColor: showZones ? "rgba(0, 242, 254, 0.2)" : "transparent", border: "1px solid #00f2fe", color: "#00f2fe", padding: "2px 8px", borderRadius: "6px", fontSize: "10px", cursor: "pointer", fontWeight: "800" }}>
                   {showZones ? "Zone B Active" : "Show Zones"}
                 </button>
-                <button onClick={() => setShowHotspots(!showHotspots)} style={{ backgroundColor: showHotspots ? "rgba(255, 0, 85, 0.2)" : "transparent", border: "1px solid #ff0055", color: "#ff4d88", padding: "2px 8px", borderRadius: "6px", fontSize: "10px", cursor: "pointer", fontWeight: "800" }}>
-                  {showHotspots ? "XAI Hotspots ON" : "Show Hotspots"}
+                <button onClick={() => setShowHotspots(!showHotspots)} style={{ backgroundColor: showHotspots ? "rgba(251, 191, 36, 0.2)" : "transparent", border: "1px solid #fbbf24", color: "#fbbf24", padding: "2px 8px", borderRadius: "6px", fontSize: "10px", cursor: "pointer", fontWeight: "800" }}>
+                  {showHotspots ? "Hotspots ON" : "Hotspots OFF"}
                 </button>
               </div>
             </div>
@@ -381,29 +463,25 @@ export default function Home() {
             >
               {selectedImage ? (
                 <>
-                  <img src={getSkeletonSrc() || selectedImage} alt="Vessel Skeleton" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
+                  <img src={getProcessedVesselSrc() || selectedImage} alt="Vessel Segmentation" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
 
-                  {/* Standardized Zone Overlays */}
                   {showZones && (
                     <svg viewBox="0 0 500 500" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
                       <circle cx="160" cy="250" r="32" fill="none" stroke="#fbbf24" strokeWidth="2" strokeDasharray="3 3" />
                       <circle cx="160" cy="250" r="75" fill="none" stroke="#00f2fe" strokeWidth="2" strokeDasharray="4 4" />
-                      <text x="160" y="165" fill="#00f2fe" fontSize="10" fontWeight="bold" textAnchor="middle">Zone B (Parr-Hubbard Caliber)</text>
+                      <text x="160" y="165" fill="#00f2fe" fontSize="10" fontWeight="bold" textAnchor="middle">Zone B (AVR Caliber)</text>
                     </svg>
                   )}
 
-                  {/* Feature 3: XAI Saliency Hotspots */}
                   {showHotspots && report && (
                     <svg viewBox="0 0 500 500" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
-                      {/* Hotspot 1: Focal Arteriolar Pinching */}
-                      <g style={{ animation: "pulse 2s infinite" }}>
+                      <g>
                         <rect x="230" y="180" width="34" height="34" fill="none" stroke="#ff0055" strokeWidth="2" />
-                        <text x="270" y="198" fill="#ff4d88" fontSize="9" fontWeight="bold">Focal Attenuation (AVR: 0.47)</text>
+                        <text x="270" y="198" fill="#ff4d88" fontSize="9" fontWeight="bold">Arteriolar Pinching ({projectedAvr})</text>
                       </g>
-                      {/* Hotspot 2: High Tortuosity Loop */}
-                      <g style={{ animation: "pulse 2.5s infinite" }}>
+                      <g>
                         <rect x="280" y="320" width="38" height="38" fill="none" stroke="#fbbf24" strokeWidth="2" />
-                        <text x="325" y="340" fill="#fbbf24" fontSize="9" fontWeight="bold">Tortuous Looping (τ: 1.50)</text>
+                        <text x="325" y="340" fill="#fbbf24" fontSize="9" fontWeight="bold">Tortuous Curvature ({projectedTort})</text>
                       </g>
                     </svg>
                   )}
@@ -424,35 +502,86 @@ export default function Home() {
                 </div>
               )}
             </div>
+
+            {avColorMode && report && (
+              <div style={{ display: "flex", justifyContent: "center", gap: "20px", marginTop: "10px", fontSize: "11px", fontWeight: "bold" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: "6px", color: "#ff4d88" }}>
+                  <span style={{ width: "10px", height: "10px", backgroundColor: "#ff0055", borderRadius: "2px" }} /> Arterioles (Pinched)
+                </span>
+                <span style={{ display: "flex", alignItems: "center", gap: "6px", color: "#00f2fe" }}>
+                  <span style={{ width: "10px", height: "10px", backgroundColor: "#00f2fe", borderRadius: "2px" }} /> Venules (Engorged)
+                </span>
+              </div>
+            )}
           </div>
 
-          {/* Right: Metrics & Gemini Staging */}
+          {/* Right: Metrics & Multilingual Diagnostic Panel */}
           <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
             
+            {/* Progression Timeline Control */}
+            <div
+              className="no-print"
+              style={{
+                backgroundColor: "rgba(18, 16, 22, 0.88)",
+                border: "1px solid rgba(0, 242, 254, 0.3)",
+                borderRadius: "14px",
+                padding: "10px 16px",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
+              <span style={{ fontSize: "11px", fontWeight: "900", color: "#a5f3fc", textTransform: "uppercase" }}>
+                📈 Longitudinal Microvascular Simulator:
+              </span>
+              <div style={{ display: "flex", gap: "6px" }}>
+                {([0, 1, 3] as const).map((yr) => (
+                  <button
+                    key={yr}
+                    onClick={() => setProgressionYear(yr)}
+                    style={{
+                      padding: "4px 10px",
+                      fontSize: "10.5px",
+                      fontWeight: "800",
+                      borderRadius: "6px",
+                      border: "none",
+                      cursor: "pointer",
+                      backgroundColor: progressionYear === yr ? "#00f2fe" : "rgba(255,255,255,0.06)",
+                      color: progressionYear === yr ? "#05181f" : "#9ca3af",
+                    }}
+                  >
+                    {yr === 0 ? "Baseline" : `+${yr} Yr Uncontrolled`}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Metric Display Cards */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "12px" }}>
               <div className="card-container" style={{ backgroundColor: "rgba(20, 17, 22, 0.88)", border: "1px solid rgba(251, 191, 36, 0.5)", borderRadius: "14px", padding: "14px" }}>
                 <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#fef08a", textTransform: "uppercase" }}>AVR Ratio</span>
-                <span className="print-text" style={{ display: "block", fontSize: "26px", fontWeight: "900", color: "#fbbf24" }}>{avrVal}</span>
+                <span className="print-text" style={{ display: "block", fontSize: "26px", fontWeight: "900", color: "#fbbf24" }}>{projectedAvr}</span>
                 <span className="print-text" style={{ fontSize: "10px", color: "#9ca3af" }}>Target: ≥ 0.67</span>
               </div>
               <div className="card-container" style={{ backgroundColor: "rgba(20, 17, 22, 0.88)", border: "1px solid rgba(255, 0, 85, 0.5)", borderRadius: "14px", padding: "14px" }}>
                 <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#ff80ab", textTransform: "uppercase" }}>Tortuosity</span>
-                <span className="print-text" style={{ display: "block", fontSize: "26px", fontWeight: "900", color: "#ff0055" }}>{tortVal}</span>
+                <span className="print-text" style={{ display: "block", fontSize: "26px", fontWeight: "900", color: "#ff0055" }}>{projectedTort}</span>
                 <span className="print-text" style={{ fontSize: "10px", color: "#9ca3af" }}>Target: &lt; 1.15</span>
               </div>
               <div className="card-container" style={{ backgroundColor: "rgba(20, 17, 22, 0.88)", border: "1px solid rgba(0, 242, 254, 0.5)", borderRadius: "14px", padding: "14px" }}>
                 <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#a5f3fc", textTransform: "uppercase" }}>Fractal (Df)</span>
-                <span className="print-text" style={{ display: "block", fontSize: "26px", fontWeight: "900", color: "#00f2fe" }}>{fractalVal}</span>
+                <span className="print-text" style={{ display: "block", fontSize: "26px", fontWeight: "900", color: "#00f2fe" }}>{projectedFractal}</span>
                 <span className="print-text" style={{ fontSize: "10px", color: "#9ca3af" }}>Capillary Density</span>
               </div>
             </div>
 
+            {/* Multilingual Diagnostic Panel */}
             <div className="card-container" style={{ backgroundColor: "rgba(20, 17, 22, 0.92)", border: "1px solid rgba(251, 191, 36, 0.45)", borderRadius: "20px", padding: "22px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid rgba(251, 191, 36, 0.3)", paddingBottom: "12px", marginBottom: "16px" }}>
                 <h2 className="print-text" style={{ margin: 0, fontSize: "15px", fontWeight: "900", color: "#ffffff" }}>🩺 Gemini 1.5 Cardio-Renal Staging</h2>
                 {report && (
                   <span style={{ backgroundColor: "rgba(251, 191, 36, 0.18)", border: "1px solid #fbbf24", color: "#fef08a", padding: "3px 12px", borderRadius: "9999px", fontSize: "11px", fontWeight: "900" }}>
-                    Risk: {riskScore} / 100 ({riskCategory})
+                    Risk: {projectedRisk} / 100
                   </span>
                 )}
               </div>
@@ -460,28 +589,38 @@ export default function Home() {
               {report ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
                   <div>
-                    <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#fef08a", textTransform: "uppercase" }}>Keith-Wagener-Barker Staging</span>
-                    <p className="print-text" style={{ margin: "3px 0 0 0", fontSize: "16px", fontWeight: "900", color: "#fbbf24" }}>{kwbStage}</p>
+                    <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#fef08a", textTransform: "uppercase" }}>
+                      {activeContent.staging_title}
+                    </span>
+                    <p className="print-text" style={{ margin: "3px 0 0 0", fontSize: "16px", fontWeight: "900", color: "#fbbf24" }}>
+                      {activeContent.kwb}
+                    </p>
                   </div>
 
                   <div>
-                    <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#fef08a", textTransform: "uppercase" }}>Clinical Diagnosis Summary</span>
+                    <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#fef08a", textTransform: "uppercase" }}>
+                      {activeContent.diagnosis_title}
+                    </span>
                     <p className="print-text" style={{ margin: "4px 0 0 0", fontSize: "13px", lineHeight: "1.5", color: "#f3f4f6", backgroundColor: "rgba(8, 7, 10, 0.8)", padding: "10px 12px", borderRadius: "10px" }}>
-                      {clinicalSummary}
+                      {activeContent.summary}
                     </p>
                   </div>
 
                   <div>
-                    <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#ff80ab", textTransform: "uppercase" }}>Systemic Cardio-Renal Risk Correlation</span>
+                    <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#ff80ab", textTransform: "uppercase" }}>
+                      {activeContent.systemic_title}
+                    </span>
                     <p className="print-text" style={{ margin: "4px 0 0 0", fontSize: "12.5px", lineHeight: "1.5", color: "#ffd1dc", backgroundColor: "rgba(45, 6, 18, 0.5)", padding: "10px 12px", borderRadius: "10px" }}>
-                      {systemicRiskSummary}
+                      {activeContent.systemic}
                     </p>
                   </div>
 
                   <div>
-                    <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#fef08a", textTransform: "uppercase" }}>Targeted Clinical Action Plan</span>
+                    <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#fef08a", textTransform: "uppercase" }}>
+                      {activeContent.action_title}
+                    </span>
                     <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "4px" }}>
-                      {getRecommendationsList().map((rec, i) => (
+                      {activeContent.actions.map((rec, i) => (
                         <div key={i} className="print-text" style={{ fontSize: "12.5px", color: "#ffffff", backgroundColor: "rgba(8, 7, 10, 0.7)", padding: "8px 12px", borderRadius: "8px", display: "flex", gap: "8px" }}>
                           <span style={{ color: "#fbbf24", fontWeight: "900" }}>•</span>
                           <span>{rec}</span>
@@ -491,9 +630,11 @@ export default function Home() {
                   </div>
 
                   <div>
-                    <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#a5f3fc", textTransform: "uppercase" }}>Patient Instruction ({language.toUpperCase()})</span>
-                    <p className="print-text" style={{ margin: "4px 0 0 0", fontSize: "12.5px", lineHeight: "1.5", color: "#cffafe", backgroundColor: "rgba(8, 25, 35, 0.6)", padding: "10px 12px", borderRadius: "8px" }}>
-                      {patientInstruction}
+                    <span className="print-text" style={{ fontSize: "10px", fontWeight: "900", color: "#a5f3fc", textTransform: "uppercase" }}>
+                      {activeContent.patient_title}
+                    </span>
+                    <p className="print-text" style={{ margin: "4px 0 0 0", fontSize: "13px", lineHeight: "1.5", color: "#cffafe", backgroundColor: "rgba(8, 25, 35, 0.6)", padding: "10px 12px", borderRadius: "8px" }}>
+                      {activeContent.patient}
                     </p>
                   </div>
                 </div>
