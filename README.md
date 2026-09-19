@@ -58,15 +58,11 @@ python -m venv venv
 pip install -r requirements.txt
 set GEMINI_API_KEY=your_gemini_api_key
 python main.py
-(Backend runs at http://localhost:8000)
+(Runs at http://localhost:8000)
 
 2. Frontend Setup (Next.js / React)
 Bash
 cd frontend
 npm install
 npm run dev
-(Frontend runs at http://localhost:3000)
-
-Meta apo auto, pata sto koumpi "Preview" sto GitHub gia na deis oti ola fainontai kathara kai swsta diamorfwmena.
-
-Pata sto telos to prasino koumpi "Commit changes..." gia na apothikeutei to arxeio.
+(Runs at http://localhost:3000)
