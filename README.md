@@ -1,68 +1,66 @@
-RetinaVascular AI
-A 3-second glance into the eye to screen for silent heart and kidney damage before symptoms appear.
+# 👁️ RetinaVascular AI
+> Non-invasive cardio-renal risk screening from retinal fundus photographs.
 
-What Problem Does This Solve?
-High blood pressure and early chronic kidney disease are silent conditions. For years, people feel healthy, experience normal vision, and show zero symptoms. Because of this, early testing rarely happens until after serious vascular damage or a cardiac event occurs. Early lab tests and specialist consultations can also be difficult to access in rural health camps and primary health centres.
+---
 
-Why the Eye?
-The tiny blood vessels in the retina share the exact same tissue structure and respond to blood pressure stress in the same way as capillaries in the heart and kidneys.
+### What Problem Does This Solve?
+High blood pressure and chronic kidney disease develop silently over years with zero pain or obvious vision changes. Because patients feel healthy, they rarely undergo early diagnostic screening until irreversible microvascular damage or a cardiovascular event occurs. Standard screening requires clinical visits, blood draws, and laboratory turnaround times that are not always accessible.
 
-Because the eye has a clear lens, the retina is the only place in the living human body where internal microvessels can be observed directly without surgery. When systemic vascular damage begins, retinal vessels narrow, twist, and drop in density at the same time.
+---
 
-Where Is It Used? (Opportunistic Screening)
-People do not typically visit eye clinics for kidney or heart checks, so this tool integrates into existing routine workflows:
+### Why the Eye?
+Retinal microvessels share structural and physiological characteristics with the microscopic blood vessels in the heart and kidneys. The clear ocular media makes the retina the only site in the human body where live microvasculature can be observed directly and non-invasively. When systemic vascular damage begins, retinal vessels undergo measurable changes: caliber narrowing, pathological tortuosity, and microvessel rarefaction.
 
-Optometry & Optical Shops: While getting glasses fitted or taking a driving vision test, the fundus camera analyzes vessel geometry in the background to flag early hypertensive risks.
+---
 
-Rural Camps & Primary Health Centres: Health workers using portable smartphone lens attachments can snap a photo and deliver clear, spoken guidance in under 3 seconds without drawing blood.
+### Opportunistic Screening Workflow
+The platform is designed to sit inside routine primary eye care visits:
+* **Optometry & Optical Shops:** While getting eyeglasses prescribed or tested, the fundus camera captures a scan that evaluates vascular stress indicators in the background.
+* **Primary Health Camps:** A quick fundus photo provides an immediate objective vascular assessment without needles or laboratory infrastructure.
+* **Routine Diabetic Screening:** Integrates into standard annual retinal screenings to provide simultaneous cardio-renal microvascular risk triage.
 
-Annual Diabetic Checkups: Patients getting mandated annual diabetic eye scans receive a dual assessment for both eye health and silent cardio-renal microvascular risks.
+---
 
-How It Works
-The system combines an interactive user interface, deterministic image processing, and clinical AI:
+### System Architecture & How It Works
 
-Interactive Clinical Dashboard (Frontend - Next.js / React):
+1. **Deterministic Computer Vision Pipeline (FastAPI / OpenCV / Scikit-Image):**
+   * **Hemoglobin & Geometry Verification:** Validates genuine fundus photography via green-channel absorption characteristics and circular aperture boundaries.
+   * **Vessel Segmentation:** Isolates retinal arterioles and venules using contrast-limited adaptive histogram equalization (CLAHE) and medial-axis skeletonization.
+   * **Biometric Feature Extraction:**
+     * **AVR (Arteriole-to-Venule Ratio):** Measures vessel thinning associated with chronic hypertension.
+     * **Tortuosity Index:** Evaluates vessel winding and buckling caused by continuous shear stress.
+     * **Fractal Dimension (Df):** Analyzes vessel branching density to detect capillary rarefaction.
 
-Real-time dual-viewport slider comparing the raw fundus capture with the segmented vascular skeleton.
+2. **Clinical Reasoning Layer (Gemini 1.5 Flash):**
+   * Correlates extracted physical measurements against the Keith-Wagener-Barker (KWB) retinal microvascular staging criteria.
+   * Calculates a composite Cardio-Renal Risk Score (1–100).
+   * Generates actionable physician referral guidelines and plain-language patient explanations.
 
-Dynamic visual metric cards displaying real-time microvascular health numbers.
+3. **Interactive Dashboard (Next.js / React / Tailwind CSS):**
+   * Dual-viewport interactive slider comparing raw fundus photographs against segmented vascular skeletons.
+   * Direct visual biometric cards reporting calculated AVR, Tortuosity, and Fractal Dimension.
+   * Clinical classification panel displaying stage severity and physician follow-up protocols.
 
-Spoken audio guidance engine for accessible triage in rural and low-literacy settings.
+---
 
-Deterministic Computer Vision (Backend - OpenCV / Scikit-Image):
+### Running the Project Locally
 
-Validates genuine retinal scans via hemoglobin color absorption and circular aperture geometry.
-
-Extracts capillary skeletons to measure concrete biological markers:
-
-AVR (Arteriole-to-Venule Ratio): Detects vessel caliber narrowing.
-
-Tortuosity: Measures abnormal twisting and buckling under vascular pressure.
-
-Fractal Dimension (Df): Evaluates capillary branching density and microvessel loss.
-
-Clinical Reasoning Layer (Gemini 1.5 Flash):
-
-Assesses biometric measurements against the Keith-Wagener-Barker staging scale.
-
-Computes an overall Cardio-Renal Risk Score (1–100).
-
-Generates actionable physician referral protocols and clear patient instructions.
-
-Quickstart
-1. Backend Setup (FastAPI / Python)
-Bash
+#### 1. Backend Setup
+```bash
 cd backend
 python -m venv venv
 .\venv\Scripts\activate
 pip install -r requirements.txt
 set GEMINI_API_KEY=your_gemini_api_key
 python main.py
-(Runs at http://localhost:8000)
+```
 
-2. Frontend Setup (Next.js / React)
-Bash
+
+#### 2. Frontend Setup
+```bash
 cd frontend
 npm install
 npm run dev
-(Runs at http://localhost:3000)
+```
+
+
